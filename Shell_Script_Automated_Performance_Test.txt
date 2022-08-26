@@ -1,0 +1,94 @@
+dt=$(date +"%d-%m-%Y")
+
+IN=${SlaveIPS}
+
+slaveIPS=$(echo $IN | tr "," "\n")
+
+slaveCOUNT=$(echo $IN | tr ',' '\n' | wc -l)
+noRows=$((THREADS/$slaveCOUNT))
+
+echo $slaveCount
+echo $noRows
+echo "Test done"
+
+split -l $noRows -a 2 user_data.csv splited_file
+
+i=1
+for file in splited_file*
+ do
+     mv $file user_data${i}.csv
+     i=$(( i + 1 ))
+ done
+
+
+j=1
+for sip in $slaveIPS
+do
+    echo "> [$sip]"
+
+#!/usr/bin/expect -f
+
+scp user_data${j}.csv jenkins@${sip}:/home/jmeter/user_data.csv
+j=$(( j + 1 ))
+
+ssh jenkins@${sip} <<EOF
+  sh /home/jmeter/jmeter-5.4.1/bin/jmeter-server -Jremote_hosts={"${MasterIP}"} -Jserver.rmi.ssl.disable=true > /dev/null 2>&1 &
+EOF
+
+sleep 5s
+done
+
+sleep 5s
+
+DIR="/var/www/html/tmpReport"
+if [ -d "$DIR" ]; then
+   echo "$DIR found removing data, please wait ..."
+   rm -rf $DIR/*
+else
+   echo "Warning: ${DIR} NOT found, creating empty Directory .."
+   mkdir -p $DIR
+fi
+
+DIR="/var/www/html/${JOB_NAME}/Reports/${THREADS}_Users_${RAMPUP}_Rampup${dt}"
+if [ -d "$DIR" ]; then
+   echo "$DIR found removing data, please wait ..."
+   rm -rf $DIR/* && rm -rf $DIR/HTML/*
+else
+   echo "Warning: ${DIR} NOT found, creating empty Directory .."
+   mkdir -p $DIR
+fi
+
+DIR="/home/jmeter/workspace/${JOB_NAME}/Reports/HTML"
+if [ -d "$DIR" ]; then
+   echo "$DIR found removing data, please wait ..."
+   rm -rf Reports/* && rm -rf Reports/HTML/*
+else
+   echo "Warning: $DIR NOT found, creating empty Directory .."
+   mkdir -p Reports/HTML
+fi
+
+
+sh /home/jmeter/jmeter-5.4.1/bin/jmeter -n -t ${JMeterPlanName} -GThreads=${THREADS} -GRampup=${RAMPUP} -R${IN} -l /home/jmeter/workspace/${JOB_NAME}/Reports/SummaryReport.csv -e -o Reports/HTML/ -r -Jserver.rmi.ssl.disable=true
+
+#Copy HTML report to Temp location
+cp -r Reports/HTML/* /var/www/html/tmpReport/
+
+echo " +++++++++++++++++++++++ Compressing Jmeter Test Report +++++++++++++++++++++++ "
+zip -r Reports/Summary_Report_${THREADS}_User_${RAMPUP}_Rampup.zip Reports/*
+
+
+java -jar /home/jmeter/take_screenshot.jar "http://127.0.0.1/tmpReport/index.html" "/home/jmeter/workspace/${JOB_NAME}/Reports/${THREADS}_Users_${RAMPUP}_Rampup${dt}.png"
+
+cp -r Reports/* /var/www/html/${JOB_NAME}/Reports/${THREADS}_Users_${RAMPUP}_Rampup${dt}/
+
+slaveIPS=$(echo $IN | tr "," "\n")
+
+for sip in $slaveIPS
+do
+    echo "> [$sip]"
+
+ssh jenkins@${sip} <<EOF
+  fuser -k 1099/tcp;
+EOF
+sleep 5s
+done
